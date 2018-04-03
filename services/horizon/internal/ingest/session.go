@@ -157,7 +157,25 @@ func (is *Session) ingestEffects() {
 		effects.Add(source, history.EffectAccountDebited, dets)
 	case xdr.OperationTypePathPayment:
 		result := is.Cursor.OperationResult().MustPathPaymentResult().MustSuccess()
-		is.ingestTradeEffects(effects, source, result.Offers)
+		op := opbody.MustPathPaymentOp()
+		for _, claim := range result.Offers {
+			// For the trade where the payer exchanged the source asset, create an AccountDebited
+			// effect
+			if claim.AssetBought.Equals(op.SendAsset) {
+				dets := map[string]interface{}{"amount": amount.String(claim.AmountBought)}
+				is.assetDetails(dets, claim.AssetBought, "")
+				effects.Add(source, history.EffectAccountDebited, dets)
+			}
+
+			// For all the sellers create a Trade effect to reflect their offer being taken
+			_, sd := is.tradeDetails(source, claim.SellerId, claim)
+			effects.Add(claim.SellerId, history.EffectTrade, sd)
+		}
+
+		// Credit the destination account the amount that was payed in the corresponding asset
+		accCredDetails := map[string]interface{}{"amount": amount.String(op.DestAmount)}
+		is.assetDetails(accCredDetails, op.DestAsset, "")
+		effects.Add(op.Destination, history.EffectAccountCredited, accCredDetails)
 	case xdr.OperationTypeManageOffer:
 		result := is.Cursor.OperationResult().MustManageOfferResult().MustSuccess()
 		is.ingestTradeEffects(effects, source, result.OffersClaimed)
